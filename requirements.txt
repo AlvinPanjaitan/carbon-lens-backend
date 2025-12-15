@@ -2,9 +2,11 @@ Flask==3.1.2
 flask-cors==6.0.2
 python-dotenv==1.2.1
 gunicorn==21.2.0
+
 groq==0.37.1
-numpy==2.2.6
-scikit-fuzzy==0.5.0
 requests==2.32.5
-gunicorn
-scipy
+
+numpy==2.2.6
+scipy>=1.11
+networkx>=3.0
+scikit-fuzzy==0.5.0
