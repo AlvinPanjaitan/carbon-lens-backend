@@ -6,3 +6,4 @@ groq==0.37.1
 numpy==2.2.6
 scikit-fuzzy==0.5.0
 requests==2.32.5
+gunicorn
