@@ -10,66 +10,81 @@ client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 def encode_image(image_data):
     return base64.b64encode(image_data).decode('utf-8')
 
-def analyze_receipt_image(image_data):
+def analyze_receipt_image(image_data, ocr_text=None):
     """
-    Tahap 1: Vision - PROMPT UPDATE (AUTO CURRENCY CONVERSION)
+    Vision + OCR Assisted Document Understanding
+    OCR text is the PRIMARY source, image is fallback.
     """
     base64_image = encode_image(image_data)
-    
-    prompt = """
-    You are an expert Environmental Data Scientist. Analyze this receipt.
-    
-    >>> CRITICAL CURRENCY & ECONOMIC CONTEXT RULE (Wajib Baca):
-    1. Detect the currency (IDR, USD, EUR, etc).
-    2. CONVERT EVERYTHING TO IDR (Indonesian Rupiah) for the 'total_price'.
-       Rates: $1=15500, €1=16500, SG$1=11500.
-    
-    3. THE KEY TO PRECISION (Dealing with High Cost of Living):
-       When determining 'max_price_per_unit' in 'market_context':
-       - If Origin is Indonesia (IDR): Use Indonesian standard (e.g., Meal Max = 50,000 IDR).
-       - If Origin is USA/Europe (USD/EUR): You MUST SCALE UP the standard to match that country's cost of living.
-         
-       EXAMPLE FAIL (Don't do this):
-       Item: Salad $10 (155,000 IDR). Max_Price set to Indo standard (50,000 IDR).
-       Result: 155k > 50k -> System thinks it's HUGE/HEAVY. (WRONG).
-       
-       EXAMPLE CORRECT (Do this):
-       Item: Salad $10 (155,000 IDR). Max_Price set to NY standard ($15 -> 232,500 IDR).
-       Result: 155k is smaller than 232k -> System thinks it's Normal Portion. (CORRECT).
-    
-    TASK:
-    1. Extract Item Name, Total Price (IDR), and Quantity.
-    2. Determine CATEGORY autonomously.
-    3. CALCULATE FUEL VOLUME (If applicable):
-       - Volume = Total_Price_IDR / 13500.
-    
-    4. FILL MARKET CONTEXT (Crucial for Weight Estimation):
-       - max_price_per_unit: The price of a "Large/Premium" version of this item IN THE ORIGIN COUNTRY context, converted to IDR.
-       - max_weight_per_unit: The weight (kg) of that "Large" version.
-       
-    OUTPUT FORMAT (JSON):
-    {
-      "items": [
-        {
-          "name": "Item Name",
-          "total_price": 155000, 
-          "quantity": 1,
-          "category": "FOOD",
-          "market_context": {
-              "max_price_per_unit": 232500, 
-              "max_weight_per_unit": 0.5,
-              "emission_factor": 1.5,
-              "packaging_factor": 0.1
-          }
-        }
-      ]
-    }
+
+    prompt = f"""
+    You are an expert Environmental Data Scientist analyzing a purchase receipt.
+
+    IMPORTANT INSTRUCTION:
+    - Use the OCR TEXT as the PRIMARY source of truth.
+    - Only use the IMAGE if OCR text is incomplete or unclear.
+    - DO NOT guess values that are not present.
+
+    ================ OCR TEXT =================
+    {ocr_text}
+    =========================================
+
+    >>> CRITICAL CURRENCY & ECONOMIC CONTEXT RULE:
+    1. Detect the original currency (IDR, USD, EUR, SGD, etc).
+    2. CONVERT ALL prices to IDR (Indonesian Rupiah).
+    Conversion rates:
+    - USD → 15,500 IDR
+    - EUR → 16,500 IDR
+    - SGD → 11,500 IDR
+
+    3. COST OF LIVING NORMALIZATION (VERY IMPORTANT):
+    - If origin currency is IDR:
+    Use Indonesian market standard (example: meal max ≈ 50,000 IDR).
+    - If origin currency is USD / EUR / SGD:
+    Scale the max_price_per_unit to match that country's cost of living,
+    then convert the final value to IDR.
+
+    BAD EXAMPLE (WRONG):
+    Item: Salad $10 → 155,000 IDR
+    max_price_per_unit: 50,000 IDR 
+
+    GOOD EXAMPLE (CORRECT):
+    Item: Salad $10 → 155,000 IDR
+    max_price_per_unit: $15 → 232,500 IDR 
+
+    TASKS:
+    1. Extract item name, quantity, and TOTAL price (IDR).
+    2. Autonomously determine item category.
+    3. If fuel is detected, calculate volume:
+    volume = total_price_IDR / 13,500
+    4. Fill market_context accurately:
+    - max_price_per_unit (IDR)
+    - max_weight_per_unit (kg)
+    - emission_factor
+    - packaging_factor
+
+    OUTPUT FORMAT (STRICT JSON):
+    {{
+    "items": [
+        {{
+        "name": "Item Name",
+        "total_price": 155000,
+        "quantity": 1,
+        "category": "FOOD",
+        "market_context": {{
+            "max_price_per_unit": 232500,
+            "max_weight_per_unit": 0.5,
+            "emission_factor": 1.5,
+            "packaging_factor": 0.1
+        }}
+        }}
+    ]
+    }}
     """
 
     try:
         completion = client.chat.completions.create(
-           
-            model="meta-llama/llama-4-scout-17b-16e-instruct", 
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {
                     "role": "user",
@@ -84,23 +99,24 @@ def analyze_receipt_image(image_data):
                     ]
                 }
             ],
-            temperature=0.0, 
+            temperature=0.0,
             max_tokens=2048,
-            response_format={"type": "json_object"} 
+            response_format={"type": "json_object"}
         )
 
         response_text = completion.choices[0].message.content
-        
-       
         parsed_data = json.loads(response_text)
+
         return parsed_data.get("items", [])
 
     except json.JSONDecodeError:
-        print(f"Error JSON: AI Output rusak.\nRaw: {response_text}")
+        print("JSON Error: AI output invalid")
+        print(response_text)
         return []
     except Exception as e:
-        print(f"Error Groq Vision: {e}")
+        print(f"Groq Vision Error: {e}")
         return []
+
 
 def generate_comparison(total_co2):
     
